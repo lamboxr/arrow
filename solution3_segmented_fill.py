@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-核心弯曲梯形程序
-使用最核心的3个参数描绘弯曲梯形，集成渐变腰线功能
+方案3: 分段填充
+解决弓形区域错误填充问题 - 将填充区域分解为多个简单多边形
 """
 
 import sys
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 from PySide6.QtCore import Qt, QPointF
-from PySide6.QtGui import QPainter, QLinearGradient, QPen, QColor, QPainterPath
+from PySide6.QtGui import QPainter, QLinearGradient, QPen, QColor, QPainterPath, QPolygonF
 
 
 # 渐变颜色定义 (来自原始gradient_trapezoid.py)
@@ -20,8 +20,8 @@ GRADIENT_COLORS = {
 }
 
 
-class CoreCurvedTrapezoidWidget(QWidget):
-    """核心弯曲梯形Widget - 使用3个核心参数"""
+class Solution3Widget(QWidget):
+    """方案3: 分段填充Widget"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -33,7 +33,7 @@ class CoreCurvedTrapezoidWidget(QWidget):
         self.position_ratio = 0.5
         
         # 核心参数3: 横向偏移量 (像素) - 正值向右
-        self.curve_offset = 200
+        self.curve_offset = 50
         
         # 固定的显示参数 (不影响曲线形状)
         self.trapezoid_height = 300
@@ -43,7 +43,7 @@ class CoreCurvedTrapezoidWidget(QWidget):
         
         # 设置窗口
         self.setFixedSize(700, 500)
-        self.setStyleSheet("background-color: #94D8F6;")
+        self.setStyleSheet("background-color: #BDC5D5;")
     
     def create_trapezoid_geometry(self):
         """创建梯形几何 - 基于核心参数"""
@@ -149,32 +149,91 @@ class CoreCurvedTrapezoidWidget(QWidget):
         
         return left_control, right_control
     
-    def create_filled_trapezoid_path(self, geometry):
-        """创建正确的梯形填充路径 - 只填充直线梯形区域，排除弓形"""
-        path = QPainterPath()
+    def get_bezier_points_on_curve(self, start_point, end_point, num_points=10):
+        """获取贝塞尔曲线上的采样点"""
+        # 计算控制点
+        base_x = start_point.x() + (end_point.x() - start_point.x()) * self.position_ratio
+        base_y = start_point.y() + (end_point.y() - start_point.y()) * self.position_ratio
+        control_point = QPointF(base_x + self.curve_offset, base_y)
         
-        # 从上底左端点开始
-        path.moveTo(geometry['top_left'])
+        points = []
+        for i in range(num_points + 1):
+            t = i / num_points
+            # 二次贝塞尔曲线公式: B(t) = (1-t)²P₀ + 2(1-t)tP₁ + t²P₂
+            x = (1-t)**2 * start_point.x() + 2*(1-t)*t * control_point.x() + t**2 * end_point.x()
+            y = (1-t)**2 * start_point.y() + 2*(1-t)*t * control_point.y() + t**2 * end_point.y()
+            points.append(QPointF(x, y))
         
-        # 绘制上底 (直线)
-        path.lineTo(geometry['top_right'])
+        return points
+    
+    def create_core_trapezoid_segment(self, geometry):
+        """创建核心梯形段（不包含弓形区域）"""
+        # 获取贝塞尔曲线上的点
+        left_curve_points = self.get_bezier_points_on_curve(
+            geometry['top_left'], geometry['bottom_left'], 20
+        )
+        right_curve_points = self.get_bezier_points_on_curve(
+            geometry['top_right'], geometry['bottom_right'], 20
+        )
         
-        # 绘制右腰线 (直线，不是贝塞尔曲线)
-        path.lineTo(geometry['bottom_right'])
+        # 创建核心区域多边形
+        polygon_points = []
         
-        # 绘制下底 (直线)
-        path.lineTo(geometry['bottom_left'])
+        # 添加上底
+        polygon_points.append(geometry['top_left'])
+        polygon_points.append(geometry['top_right'])
         
-        # 绘制左腰线 (直线，不是贝塞尔曲线)
-        path.lineTo(geometry['top_left'])
+        # 添加右侧贝塞尔曲线点（从上到下）
+        for point in right_curve_points[1:]:  # 跳过第一个点（重复）
+            polygon_points.append(point)
         
-        # 闭合路径
-        path.closeSubpath()
+        # 添加下底（从右到左）
+        polygon_points.append(geometry['bottom_left'])
         
-        return path
+        # 添加左侧贝塞尔曲线点（从下到上）
+        for point in reversed(left_curve_points[:-1]):  # 跳过最后一个点（重复）
+            polygon_points.append(point)
+        
+        return QPolygonF(polygon_points)
+    
+    def create_right_curved_segment(self, geometry):
+        """创建右侧弯曲段（右侧弓形区域）"""
+        # 获取右侧贝塞尔曲线上的点
+        right_curve_points = self.get_bezier_points_on_curve(
+            geometry['top_right'], geometry['bottom_right'], 20
+        )
+        
+        # 创建右侧弓形多边形
+        polygon_points = []
+        
+        # 添加直线边（从上到下）
+        polygon_points.append(geometry['top_right'])
+        polygon_points.append(geometry['bottom_right'])
+        
+        # 添加贝塞尔曲线边（从下到上）
+        for point in reversed(right_curve_points[:-1]):  # 跳过最后一个点（重复）
+            polygon_points.append(point)
+        
+        return QPolygonF(polygon_points)
+    
+    def create_segmented_fill_paths(self, geometry):
+        """方案3: 分段填充 - 将填充区域分解为多个简单多边形"""
+        segments = []
+        
+        # 段1: 核心梯形区域（排除所有弓形）
+        core_segment = self.create_core_trapezoid_segment(geometry)
+        segments.append(('core', core_segment))
+        
+        # 段2: 右侧弯曲段（右侧弓形区域，需要包含）
+        right_segment = self.create_right_curved_segment(geometry)
+        segments.append(('right_bow', right_segment))
+        
+        # 注意：不包含左侧弓形段，因为它应该被排除
+        
+        return segments
     
     def paintEvent(self, event):
-        """绘制核心弯曲梯形"""
+        """绘制方案3: 分段填充"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         
@@ -185,54 +244,38 @@ class CoreCurvedTrapezoidWidget(QWidget):
             # 1. 创建梯形几何
             geometry = self.create_trapezoid_geometry()
             
-            # 2. 绘制填充的弯曲梯形
-            filled_path = self.create_filled_trapezoid_path(geometry)
+            # 2. 方案3: 分段填充
+            segments = self.create_segmented_fill_paths(geometry)
+            
             painter.setBrush(QColor("#CBD900"))  # 设置填充颜色
             painter.setPen(Qt.NoPen)  # 不绘制边框
-            painter.drawPath(filled_path)
+            
+            # 绘制每个段
+            for segment_name, segment_polygon in segments:
+                painter.drawPolygon(segment_polygon)
             
             # 3. 绘制弯曲梯形的渐变腰线 (在填充之上)
             left_control, right_control = self.draw_curved_trapezoid(painter, geometry)
             
-            # 4. 绘制参数信息
+            # 4. 绘制方案信息
             painter.setPen(QColor("#333333"))
-            painter.drawText(20, 30, "核心弯曲梯形 - 3参数控制 + 颜色填充")
-            painter.drawText(20, 50, "=" * 40)
+            painter.drawText(20, 30, "方案3: 分段填充")
+            painter.drawText(20, 50, "=" * 20)
             
             painter.drawText(20, 80, f"参数1 - 上底平移量: {self.top_offset:+.0f} 像素")
             painter.drawText(20, 100, f"参数2 - 控制点位置比例: {self.position_ratio:.2f}")
             painter.drawText(20, 120, f"参数3 - 横向偏移量: {self.curve_offset:+.0f} 像素")
             
-            painter.drawText(20, 150, "填充颜色: #CBD900")
-            painter.drawText(20, 170, "渐变腰线特性:")
-            painter.drawText(20, 190, f"• 顶部: {GRADIENT_COLORS['top']} (完全透明)")
-            painter.drawText(20, 210, f"• 中间: {GRADIENT_COLORS['middle']} (50%透明)")
-            painter.drawText(20, 230, f"• 底部: {GRADIENT_COLORS['bottom']} (完全透明)")
+            painter.drawText(20, 150, "解决方案: 分段填充")
+            painter.drawText(20, 170, f"• 段数: {len(segments)}")
+            painter.drawText(20, 190, "• 段1: 核心梯形区域")
+            painter.drawText(20, 210, "• 段2: 右侧弯曲段")
+            painter.drawText(20, 230, "• 排除: 左侧弓形区域")
             
-            # 5. 绘制关键点标记 (可选，用于调试)
-            if True:  # 显示关键点
-                # 梯形顶点
-                painter.setPen(QPen(QColor("#FF0000"), 2))
-                painter.setBrush(QColor("#FF0000"))
-                painter.drawEllipse(geometry['top_left'], 4, 4)
-                painter.drawEllipse(geometry['top_right'], 4, 4)
-                painter.drawEllipse(geometry['bottom_left'], 4, 4)
-                painter.drawEllipse(geometry['bottom_right'], 4, 4)
-                
-                # 控制点
-                painter.setPen(QPen(QColor("#0000FF"), 2))
-                painter.setBrush(QColor("#0000FF"))
-                painter.drawEllipse(left_control, 6, 6)
-                painter.drawEllipse(right_control, 6, 6)
-                
-                # 标注
-                painter.setPen(QColor("#333333"))
-                painter.drawText(geometry['top_left'].x() - 30, geometry['top_left'].y() - 10, "上左")
-                painter.drawText(geometry['top_right'].x() + 10, geometry['top_right'].y() - 10, "上右")
-                painter.drawText(geometry['bottom_left'].x() - 30, geometry['bottom_left'].y() + 20, "下左")
-                painter.drawText(geometry['bottom_right'].x() + 10, geometry['bottom_right'].y() + 20, "下右")
-                painter.drawText(left_control.x() - 30, left_control.y() - 10, "左控制点")
-                painter.drawText(right_control.x() + 10, right_control.y() - 10, "右控制点")
+            painter.drawText(20, 260, "技术实现:")
+            painter.drawText(20, 280, "• 贝塞尔曲线采样点")
+            painter.drawText(20, 300, "• 多边形分解")
+            painter.drawText(20, 320, "• 精确控制每个区域")
             
         except Exception as e:
             print(f"绘图错误: {e}")
@@ -240,16 +283,16 @@ class CoreCurvedTrapezoidWidget(QWidget):
             painter.end()
 
 
-class CoreCurvedTrapezoidWindow(QMainWindow):
-    """核心弯曲梯形主窗口"""
+class Solution3Window(QMainWindow):
+    """方案3主窗口"""
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("核心弯曲梯形 - 3参数 + 渐变腰线")
+        self.setWindowTitle("方案3: 分段填充 - 解决弓形填充问题")
         self.setGeometry(100, 100, 750, 600)
         
         # 创建并设置中心Widget
-        self.trapezoid_widget = CoreCurvedTrapezoidWidget()
+        self.trapezoid_widget = Solution3Widget()
         self.setCentralWidget(self.trapezoid_widget)
 
 
@@ -258,7 +301,7 @@ def main():
     app = QApplication(sys.argv)
     
     # 创建主窗口
-    window = CoreCurvedTrapezoidWindow()
+    window = Solution3Window()
     window.show()
     
     # 运行应用程序
