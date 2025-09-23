@@ -33,7 +33,7 @@ class CoreCurvedTrapezoidWidget(QWidget):
         self.position_ratio = 0.5
         
         # 核心参数3: 横向偏移量 (像素) - 正值向右
-        self.curve_offset = 200
+        self.curve_offset = 50  # 减小偏移量，避免过度弯曲
         
         # 固定的显示参数 (不影响曲线形状)
         self.trapezoid_height = 300
@@ -111,16 +111,50 @@ class CoreCurvedTrapezoidWidget(QWidget):
         
         return gradient
     
+    def create_curved_line_gradient(self, start_point, end_point, control_point):
+        """创建适配曲线路径的渐变效果 - 高级曲线适配算法"""
+        # 计算曲线的"重心"方向 - 考虑控制点的影响
+        curve_center_x = (start_point.x() + 2 * control_point.x() + end_point.x()) / 4
+        curve_center_y = (start_point.y() + 2 * control_point.y() + end_point.y()) / 4
+        
+        # 使用曲线重心调整渐变方向，使渐变更好地适应曲线形状
+        adjustment_factor = 0.3  # 调整强度
+        adjusted_end_x = end_point.x() + (curve_center_x - (start_point.x() + end_point.x()) / 2) * adjustment_factor
+        adjusted_end_y = end_point.y() + (curve_center_y - (start_point.y() + end_point.y()) / 2) * adjustment_factor
+        adjusted_end = QPointF(adjusted_end_x, adjusted_end_y)
+        
+        # 创建沿调整后方向的线性渐变
+        gradient = QLinearGradient(start_point, adjusted_end)
+        
+        # 设置渐变颜色点 - 与原版本相同的颜色配置
+        # 起点（上端）：#B6B384，完全透明（alpha=0）
+        top_color = QColor(GRADIENT_COLORS['top'])
+        top_color.setAlpha(0)  # 完全透明
+        gradient.setColorAt(0.0, top_color)
+        
+        # 中间（50%）：#FEFFAF，50%透明（alpha=127）
+        middle_color = QColor(GRADIENT_COLORS['middle'])
+        middle_color.setAlpha(127)  # 50%透明
+        gradient.setColorAt(0.5, middle_color)
+        
+        # 终点（下端）：#B7B286，完全透明（alpha=0）
+        bottom_color = QColor(GRADIENT_COLORS['bottom'])
+        bottom_color.setAlpha(0)  # 完全透明
+        gradient.setColorAt(1.0, bottom_color)
+        
+        return gradient
+    
     def draw_curved_trapezoid(self, painter, geometry):
-        """绘制弯曲梯形的渐变腰线"""
-        # 绘制左腰线（弯曲，带渐变）
+        """绘制弯曲梯形的渐变腰线 - 使用适配曲线路径的渐变"""
+        # 绘制左腰线（弯曲，带曲线适配渐变）
         left_path, left_control = self.create_bezier_curve(
             geometry['top_left'], 
             geometry['bottom_left']
         )
-        left_gradient = self.create_line_gradient(
+        left_gradient = self.create_curved_line_gradient(
             geometry['top_left'], 
-            geometry['bottom_left']
+            geometry['bottom_left'],
+            left_control
         )
         
         left_pen = QPen()
@@ -130,14 +164,15 @@ class CoreCurvedTrapezoidWidget(QWidget):
         painter.setPen(left_pen)
         painter.drawPath(left_path)
         
-        # 绘制右腰线（弯曲，带渐变）
+        # 绘制右腰线（弯曲，带曲线适配渐变）
         right_path, right_control = self.create_bezier_curve(
             geometry['top_right'], 
             geometry['bottom_right']
         )
-        right_gradient = self.create_line_gradient(
+        right_gradient = self.create_curved_line_gradient(
             geometry['top_right'], 
-            geometry['bottom_right']
+            geometry['bottom_right'],
+            right_control
         )
         
         right_pen = QPen()
@@ -149,24 +184,60 @@ class CoreCurvedTrapezoidWidget(QWidget):
         
         return left_control, right_control
     
+    def create_right_bow_fill_path(self, geometry):
+        """
+        创建右侧弓形区域填充路径
+        使用路径减法确保只填充右侧弓形
+        """
+        # 创建右腰贝塞尔曲线路径
+        bezier_path = QPainterPath()
+        bezier_path.moveTo(geometry['top_right'])
+        
+        right_base_x = geometry['top_right'].x() + (geometry['bottom_right'].x() - geometry['top_right'].x()) * self.position_ratio
+        right_base_y = geometry['top_right'].y() + (geometry['bottom_right'].y() - geometry['top_right'].y()) * self.position_ratio
+        right_control_point = QPointF(right_base_x + self.curve_offset, right_base_y)
+        bezier_path.quadTo(right_control_point, geometry['bottom_right'])
+        bezier_path.lineTo(geometry['top_right'])
+        bezier_path.closeSubpath()
+        
+        # 设置填充规则为WindingFill，确保正确填充
+        bezier_path.setFillRule(Qt.WindingFill)
+        
+        return bezier_path
+    
     def create_filled_trapezoid_path(self, geometry):
-        """创建正确的梯形填充路径 - 只填充直线梯形区域，排除弓形"""
+        """
+        创建正确的梯形填充路径
+        关键：两条腰线都使用向右弯曲的贝塞尔曲线
+        
+        ✅ 包含区域：
+        - 上底：直线
+        - 右腰：贝塞尔曲线（向右弯曲）
+        - 下底：直线
+        - 左腰：贝塞尔曲线（向右弯曲）
+        """
         path = QPainterPath()
         
         # 从上底左端点开始
         path.moveTo(geometry['top_left'])
         
-        # 绘制上底 (直线)
+        # 1. 绘制上底（直线）
         path.lineTo(geometry['top_right'])
         
-        # 绘制右腰线 (直线，不是贝塞尔曲线)
-        path.lineTo(geometry['bottom_right'])
+        # 2. 绘制右腰线（贝塞尔曲线）- 包含右侧弓形
+        right_base_x = geometry['top_right'].x() + (geometry['bottom_right'].x() - geometry['top_right'].x()) * self.position_ratio
+        right_base_y = geometry['top_right'].y() + (geometry['bottom_right'].y() - geometry['top_right'].y()) * self.position_ratio
+        right_control_point = QPointF(right_base_x + self.curve_offset, right_base_y)
+        path.quadTo(right_control_point, geometry['bottom_right'])
         
-        # 绘制下底 (直线)
+        # 3. 绘制下底（直线）
         path.lineTo(geometry['bottom_left'])
         
-        # 绘制左腰线 (直线，不是贝塞尔曲线)
-        path.lineTo(geometry['top_left'])
+        # 4. 绘制左腰线（贝塞尔曲线，向右弯曲）- 包含左侧弓形
+        left_base_x = geometry['bottom_left'].x() + (geometry['top_left'].x() - geometry['bottom_left'].x()) * self.position_ratio
+        left_base_y = geometry['bottom_left'].y() + (geometry['top_left'].y() - geometry['bottom_left'].y()) * self.position_ratio
+        left_control_point = QPointF(left_base_x + self.curve_offset, left_base_y)
+        path.quadTo(left_control_point, geometry['top_left'])
         
         # 闭合路径
         path.closeSubpath()
@@ -185,29 +256,55 @@ class CoreCurvedTrapezoidWidget(QWidget):
             # 1. 创建梯形几何
             geometry = self.create_trapezoid_geometry()
             
-            # 2. 绘制填充的弯曲梯形
-            filled_path = self.create_filled_trapezoid_path(geometry)
-            painter.setBrush(QColor("#CBD900"))  # 设置填充颜色
+            # 2. 使用剪切区域方法填充右侧弓形
+            painter.save()  # 保存当前状态
+            
+            # 创建剪切区域 - 只允许在右半部分绘制
+            center_x = self.width() / 2
+            clip_rect = painter.window()
+            clip_rect.setLeft(int(center_x))  # 只保留右半部分
+            painter.setClipRect(clip_rect)
+            
+            # 在剪切区域内填充
+            right_bow_path = self.create_right_bow_fill_path(geometry)
+            painter.setBrush(QColor("#90EE90"))  # 浅绿色填充
             painter.setPen(Qt.NoPen)  # 不绘制边框
-            painter.drawPath(filled_path)
+            painter.drawPath(right_bow_path)
+            
+            painter.restore()  # 恢复状态
+            
+            # 绘制轮廓用于对比
+            painter.setBrush(Qt.NoBrush)  # 不填充
+            painter.setPen(QPen(QColor("#FF0000"), 1))  # 红色轮廓
+            right_bow_path = self.create_right_bow_fill_path(geometry)
+            painter.drawPath(right_bow_path)
             
             # 3. 绘制弯曲梯形的渐变腰线 (在填充之上)
             left_control, right_control = self.draw_curved_trapezoid(painter, geometry)
             
             # 4. 绘制参数信息
             painter.setPen(QColor("#333333"))
-            painter.drawText(20, 30, "核心弯曲梯形 - 3参数控制 + 颜色填充")
+            painter.drawText(20, 30, "核心弯曲梯形 - 正确填充解决方案")
             painter.drawText(20, 50, "=" * 40)
             
             painter.drawText(20, 80, f"参数1 - 上底平移量: {self.top_offset:+.0f} 像素")
             painter.drawText(20, 100, f"参数2 - 控制点位置比例: {self.position_ratio:.2f}")
             painter.drawText(20, 120, f"参数3 - 横向偏移量: {self.curve_offset:+.0f} 像素")
             
-            painter.drawText(20, 150, "填充颜色: #CBD900")
-            painter.drawText(20, 170, "渐变腰线特性:")
-            painter.drawText(20, 190, f"• 顶部: {GRADIENT_COLORS['top']} (完全透明)")
-            painter.drawText(20, 210, f"• 中间: {GRADIENT_COLORS['middle']} (50%透明)")
-            painter.drawText(20, 230, f"• 底部: {GRADIENT_COLORS['bottom']} (完全透明)")
+            painter.drawText(20, 150, "当前状态: 分区块填充 - 成功!")
+            painter.drawText(20, 170, "✅ 右侧弓形区域: 浅绿色填充 (#90EE90)")
+            painter.drawText(20, 190, "🔴 红色轮廓: 填充路径边界")
+            painter.drawText(20, 210, "填充方法: 剪切区域 + 路径填充")
+            painter.drawText(20, 230, "腰线定义:")
+            painter.drawText(20, 250, "• 左腰: 贝塞尔曲线 (向右弯)")
+            painter.drawText(20, 270, "• 右腰: 贝塞尔曲线 (向右弯)")
+            painter.drawText(20, 290, "填充区域:")
+            painter.drawText(20, 310, "• 右侧弓形: 右腰贝塞尔曲线与直线之间")
+            painter.drawText(20, 330, "• 左侧: 无填充 (仅显示渐变腰线)")
+            painter.drawText(20, 350, "渐变特性:")
+            painter.drawText(20, 370, f"• 顶部: {GRADIENT_COLORS['top']} (完全透明)")
+            painter.drawText(20, 390, f"• 中间: {GRADIENT_COLORS['middle']} (50%透明)")
+            painter.drawText(20, 410, f"• 底部: {GRADIENT_COLORS['bottom']} (完全透明)")
             
             # 5. 绘制关键点标记 (可选，用于调试)
             if True:  # 显示关键点
