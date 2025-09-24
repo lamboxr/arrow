@@ -195,7 +195,7 @@ class Solution1Widget(QWidget):
             filled_path = self.create_bezier_boundary_fill_path(geometry)
             painter.setBrush(QColor("#CBD900"))  # 设置填充颜色
             painter.setPen(Qt.NoPen)  # 不绘制边框
-            painter.drawPath(filled_path)
+            # painter.drawPath(filled_path)
             
             # 3. 绘制弯曲梯形的渐变腰线 (在填充之上)
             left_control, right_control = self.draw_curved_trapezoid(painter, geometry)

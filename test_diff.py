@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QWidget, QApplication
-from PySide6.QtGui import QPainter, QPen, QBrush, QLinearGradient, QPainterPath
+from PySide6.QtGui import QPainter, QPen, QBrush, QLinearGradient, QPainterPath,QColor
 from PySide6.QtCore import Qt, QPointF
 import sys
 
@@ -15,7 +15,9 @@ class TestWidget(QWidget):
         
         # 创建渐变
         gradient = QLinearGradient(50, 50, 250, 200)
-        gradient.setColorAt(0, Qt.red)
+        start_color = QColor("#FF0000")
+        start_color.setAlpha(12)  # 50%透明
+        gradient.setColorAt(0, start_color)
         gradient.setColorAt(1, Qt.blue)
         
         # 第一种写法：绘制线条
